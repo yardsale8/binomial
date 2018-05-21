@@ -89,7 +89,9 @@ prob.between.str <- function(lower, upper, p, with.mathjax = FALSE, digits = 3) 
                         "\\le X\\le ",
                         " <= X <= "),
                  upper)
-  prob.str.outer(inner, p, with.mathjax, digits)
+  ifelse(lower == upper,
+         prob.equal.str(lower, p, with.mathjax, digits),
+         prob.str.outer(inner, p, with.mathjax, digits))
 }
 
 #
@@ -176,36 +178,33 @@ update.values <- function(session, n, p) {
         numericInput("n", "Number of Trials:", starting.n, min = 1, max = max.n),
         numericInput("p", "P(Success)", starting.p, min = 0, max = 1),
           # TO DO ... Add input boxes for the drag?
-        selectInput("type", h3(" Selection Method"), 
+        radioButtons("type", h3(" Selection Method"), 
                     choices = list("Drag" = 1, 
                                    "Left-tail" = 2,
                                    "Right-tail" = 3,
                                    "Two-tail" = 4),
                                    # TODO ? "Left- and Right-tail", 5), 
-                    selected = 1),
+                    selected = 1,
+                    inline = TRUE),
         #verbatimTextOutput("click"),
         conditionalPanel(
           condition = "input.type == 1",
           # TO DO ... Add input boxes for the drag?
           numericInput("left_drag", "Lower Bound:", NULL, min = 0, max = max.n),
-          numericInput("right_drag", "Upper Bound:", NULL, min = 0, max = max.n),
-          h3("Probability"),
-          uiOutput("brush")),
+          numericInput("right_drag", "Upper Bound:", NULL, min = 0, max = max.n)),
         conditionalPanel(
           condition = "input.type == 2",
-          numericInput("left", "Upper Bound:", qbinom(0.05, starting.n, starting.p), min = 0, max = max.n),
-          h3("Probability"),
-          uiOutput("lower")),
+          numericInput("left", "Upper Bound:", qbinom(0.05, starting.n, starting.p), min = 0, max = max.n)),
         conditionalPanel(
           condition = "input.type == 3",
-          numericInput("right", "Lower Bound:", qbinom(0.95, starting.n, starting.p), min = 0, max = max.n),
-          h3("Probability"),
-          uiOutput("upper")),
+          numericInput("right", "Lower Bound:", qbinom(0.95, starting.n, starting.p), min = 0, max = max.n)),
         conditionalPanel(
           condition = "input.type == 4",
-          numericInput("two_tail", "Value", qbinom(0.95, starting.n, starting.p), min = 0, max = max.n),
-          h3("Probability"),
-          uiOutput("two_tail")),
+          numericInput("two_tail", "Value", qbinom(0.95, starting.n, starting.p), min = 0, max = max.n)),
+        h3("Probability"),
+        uiOutput("new_prob"),
+        textOutput("new_lower"),
+        textOutput("new_upper"),
         checkboxInput("table", "Show Table", value = FALSE, width = NULL),
         conditionalPanel(
           condition = "input.table == true",
@@ -233,12 +232,58 @@ server <- shinyServer(function(input, output, session) {
   values <- 
     reactiveValues()
   
+  observeEvent(input$tail,
+               updateCheckboxInput(session, "itail", value = input$tail))
+  
   observeEvent(input$n, {
     update.values(session, input$n, input$p)
   })
 
   observeEvent(input$p, {
     update.values(session, input$n, input$p)
+  })
+  
+  
+  output$new_prob <- renderUI({
+    if (input$type == 2) {
+        values$selected <- 0:input$left
+        withMathJax(prob.one.tail.str(input$left, 
+                                      values$p,
+                                      with.mathjax = TRUE))
+    } else if (input$type == 3) {
+        values$selected <- input$right:input$n
+        withMathJax(prob.one.tail.str(input$right,
+                                      values$p,
+                                      with.mathjax = TRUE,
+                                      lower.tail = FALSE))
+  } else if (input$type == 4) {
+        exp.val <- input$n*input$p
+        limits <- two.tail.limits(input$two_tail, input$n, input$p)
+        values$selected <- c(0:limits$lower,limits$upper:input$n)
+        withMathJax(prob.two.tail.str(limits$lower,
+                                      limits$upper,
+                                      values$p,
+                                      with.mathjax = TRUE))
+  } else {
+        d <- event_data("plotly_selected")
+        if (!is.null(d)) {
+            values$d<- d
+            lower_drag <- min(values$d$x)
+            lower_box <- input$left_drag
+            values$new_lower <- ifelse(lower_box != lower_drag,
+                                       lower_box,
+                                       lower_drag)
+            upper_drag <- min(values$d$x)
+            upper_box <- input$right_drag
+            values$new_upper <- ifelse(upper_box != upper_drag,
+                                       upper_box,
+                                       upper_drag)
+            values$selected <- values$new_lower:values$new_upper
+        }
+        withMathJax(ifelse(is.null(d),
+                           "Drag to calculate the probability for any number of bars (double-click to clear)",
+               prob.between.str(min(values$selected), max(values$selected), values$p, with.mathjax = TRUE)))
+  }
   })
   
   output$plot <- renderPlotly({
@@ -296,10 +341,10 @@ server <- shinyServer(function(input, output, session) {
   
   output$left_drag <- 
     renderUI({
-    if (is.null(values$selected)) {
+    if (is.null(values$d)) {
       renderText("")
     } else {
-      numericInput("left_drag", "Upper Bound:", min(values$selected), min = 0, max = max.n)
+      numericInput("left_drag", "Upper Bound:", min(values$d$x), min = 0, max = max.n)
     }}) 
   
 #  observeEvent(input$left_drag,
@@ -307,99 +352,53 @@ server <- shinyServer(function(input, output, session) {
   
   output$right_drag <- 
     renderUI({
-    if (is.null(values$selected)) {
+    if (is.null(values$d)) {
       renderText("")
     } else {
-      numericInput("right_drag", "Upper Bound:", max(values$selected), min = 0, max = max.n)
+      numericInput("right_drag", "Upper Bound:", max(values$d$x), min = 0, max = max.n)
     }}) 
   
-  output$lower <-
-    renderUI({
-      if (input$type == 2) {
-        values$selected <- 0:input$left
-        values$lower<- input$left
-      }
-      withMathJax(prob.one.tail.str(input$left, 
-                                    values$p,
-                                    with.mathjax = TRUE))
-    }) 
-  
-  output$upper <-
-    renderUI({
-      if (input$type == 3) {
-        values$selected <- input$right:input$n
-      }
-      withMathJax(prob.one.tail.str(input$right,
-                                    values$p,
-                                    with.mathjax = TRUE,
-                                    lower.tail = FALSE))
-    }) 
-  
-  output$two_tail <-
-    renderUI({
-      if (input$type == 4) {
-        exp.val <- input$n*input$p
-        limits <- two.tail.limits(input$two_tail, input$n, input$p)
-        values$selected <- c(0:limits$lower,limits$upper:input$n)
-        withMathJax(prob.two.tail.str(limits$lower,
-                                      limits$upper,
-                                      values$p,
-                                      with.mathjax = TRUE))
-      }
-    }) 
-  
-  
-  output$brush <-  renderUI({
-    d <- event_data("plotly_selected")
-    if (is.null(d)) {
-      values$selected <- NULL}
-    if (!is.null(d) & input$type == 1) {
-      # Free selection
-      values$selected <- unique(min(d$x):max(d$x))
-      values$lower <- min(d$x)
-      values$upper <- max(d$x)
-      
+  observeEvent(values$d,{
+      lower <- ifelse(is.null(values$d),
+                      NULL,
+                      min(values$d$x))
+      upper <- ifelse(is.null(values$d),
+                      NULL,
+                      max(values$d$x))
       updateNumericInput(session, 
                          "left_drag", 
-                         value = min(d$x),
+                         value = lower,
                          min = 0,
-                         max = n)
+                         max = upper)
       
       updateNumericInput(session, 
                          "right_drag", 
-                         value = max(d$x),
-                         min = 0,
+                         value = upper,
+                         min = lower,
                          max = n)
-    } 
-    #else if (!is.null(d) & input$type == 2) {
-    #  print("here lower")
-    #  # Left tail - Assume the tail ends at the largest value selected
-    #  values$selected <- 0:max(d$x)
-    #  print(values$selected)
-    #} else if (!is.null(d) & input$type == 3) {
-    #  # Right tail - Assume the tail ends at the smaller value selected
-    #  print("here lower")
-    #  values$selected <- min(d$x)$input$n
-    #} else {
-    #  # Two tail
-    #  exp.val <- input$n*input$p
-    #  value <- ifelse(min(d$x) >= exp.val,
-    #                  min(d$x),
-    #                  max(d$x))
-    #  limits <- two.tail.limits(value, input$n, input$p)
-    #  values$selected <- c(0:limits$lower,limits$upper:input$n)
-    #}
-    out2 <- 
-      if (is.null(d)) {
-        ""
-      } else if(nrow(d) == 1) {
-        x <- d[3] - 1
-        prob.equal.str(x, values$p, with.mathjax = TRUE)
-      } else if (nrow(d) > 1) {
-        lower <- min(d$x)
-        upper <- max(d$x)
-        prob.between.str(lower, upper, values$p, with.mathjax = TRUE)
-      }
+  })
+  
+  
+observeEvent(input$right_drag,
+      updateNumericInput(session, 
+                         "left_drag", 
+                         value = input$left_drag,
+                         min = 0,
+                         max = input$right_drag))
+
+observeEvent(input$left_drag,
+      updateNumericInput(session, 
+                         "right_drag", 
+                         value = input$right_drag,
+                         min = input$left_drag,
+                         max = input$n))
+  
+  output$brush <-  renderUI({
+    d <- event_data("plotly_selected")
+    values$d<- d
+    out2 <- ifelse(is.null(d),
+                   "",
+                   prob.between.str(min(values$selected), max(values$selected), values$p, with.mathjax = TRUE))
     if (is.null(d)) "Click and drag events (i.e., select/lasso) appear here (double-click to clear)" else withMathJax(out2)
   })
 })
